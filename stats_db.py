@@ -9,8 +9,8 @@ class StatsDB(object):
     def __init__(self, db_path):
         self.db_path = db_path
 
-        c = sqlite3.connect(self.db_path)
-        c.execute(
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
             '''CREATE TABLE IF NOT EXISTS songs (
                 id INTEGER PRIMARY KEY,
                 artist TEXT,
@@ -30,17 +30,24 @@ class StatsDB(object):
                 ))'''
         )
 
-        c.execute(
+        conn.execute(
             '''CREATE TABLE IF NOT EXISTS plays (
                 time INTEGER PRIMARY KEY,
                 song INTEGER)'''
         )
-        c.commit()
-        c.close()
+
+        conn.execute(
+            '''CREATE VIEW IF NOT EXISTS plays_pretty AS
+                SELECT datetime(time, "unixepoch"), artist, title,
+                    album_artist, album, date, track, length
+                FROM plays JOIN songs ON plays.song = songs.id'''
+            )
+        conn.commit()
+        conn.close()
 
     def register_play(self, artist, title, album_artist, album, date, track, length, playtime=None):
-        c = sqlite3.connect(self.db_path)
-        c.execute(
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
             '''INSERT OR IGNORE INTO songs (
                 artist,
                 title,
@@ -53,9 +60,9 @@ class StatsDB(object):
             VALUES (?, ?, ?, ?, ?, ?, ?)''',
             (artist, title, album_artist, album, date, track, length)
         )
-        c.commit()
+        conn.commit()
 
-        song_id = c.execute(
+        song_id = conn.execute(
             '''SELECT id
             FROM songs
             WHERE
@@ -70,9 +77,9 @@ class StatsDB(object):
         ).fetchone()[0]
 
         if playtime:
-            c.execute('''INSERT INTO plays VALUES (?, ?)''', (playtime, song_id))
+            conn.execute('''INSERT INTO plays VALUES (?, ?)''', (playtime, song_id))
         else:
-            c.execute('''INSERT INTO plays VALUES (?, ?)''', (int(time()), song_id))
-        c.commit()
+            conn.execute('''INSERT INTO plays VALUES (?, ?)''', (int(time()), song_id))
+        conn.commit()
 
-        c.close()
+        conn.close()
