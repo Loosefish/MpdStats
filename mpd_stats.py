@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-from time import time
+from time import time, sleep
 import argparse
 import logging
 import socket
@@ -11,26 +11,29 @@ class Mpd():
     def __init__(self, addr):
         self.addr = addr
 
-    def _query(self, text):
-        conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        conn.connect(self.addr)
-        data = conn.recv(32)
-        conn.sendall(bytes(text + '\n', 'utf8'))
-        response = b""
-        while True:
-            data = conn.recv(4096)
-            response = response + data
-            if data[-4:] == b'\nOK\n' or data == b'OK\n':
-                break
-        conn.close()
-        return str(response, 'utf8').splitlines()[:-1]
+    def _query(self, query):
+        result = None
+        if not query.endswith("\n"):
+            query += "\n"
+
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(self.addr)
+        status = sock.recv(4096)
+        if status.startswith(b"OK MPD"):
+            sock.sendall(query.encode("utf8"))
+            result = sock.recv(4096)
+            if not result.startswith(b"ACK"):
+                while not result.endswith(b"OK\n"):
+                    result += sock.recv(4096)
+        sock.close()
+        return result.decode("utf8")
 
     def _get_dicts(self, query):
-        response = self._query(query)
-        new_token = response[0].split(': ', 1)[0]
+        response = self._query(query).splitlines()[:-1]
+        new_token = response[0].split(": ", 1)[0]
         dicts = []
         for res in response:
-            tag, value = res.split(': ', 1)
+            tag, value = res.split(": ", 1)
             if tag == new_token:
                 this = dict([(tag, value)])
                 dicts.append(this)
@@ -39,19 +42,19 @@ class Mpd():
         return dicts
 
     def get_status(self):
-        status = self._get_dicts('status')[0]
-        if 'time' in status:
-            status['time'], status['duration'] = tuple(map(int, status["time"].split(":")))
+        status = self._get_dicts("status")[0]
+        if "time" in status:
+            status["time"], status["duration"] = tuple(map(int, status["time"].split(":")))
         return status
 
     def get_currentsong(self):
         try:
-            return self._get_dicts('currentsong')[0]
+            return self._get_dicts("currentsong")[0]
         except IndexError:
             return None
 
     def wait(self, events):
-        self._query('idle {}'.format(events))
+        self._query("idle %s" % events)
 
 
 class Stats():
@@ -60,7 +63,7 @@ class Stats():
 
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                '''CREATE TABLE IF NOT EXISTS plays (
+                """CREATE TABLE IF NOT EXISTS plays (
                     time INTEGER PRIMARY KEY,
                     artist TEXT,
                     title TEXT,
@@ -69,13 +72,13 @@ class Stats():
                     album_date TEXT,
                     track TEXT,
                     length INTEGER
-                    )'''
+                    )"""
             )
 
     def register_play(self, playtime, artist, title, album, album_artist, album_date, track, length):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                '''INSERT INTO plays (
+                """INSERT INTO plays (
                     time,
                     artist,
                     title,
@@ -85,7 +88,7 @@ class Stats():
                     track,
                     length
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (playtime, artist, title, album, album_artist, album_date, track, length)
             )
 
@@ -97,8 +100,7 @@ class Monitor():
         self.min_prog = min_prog
         self.log = logging.getLogger(__name__)
 
-    @staticmethod
-    def retry(f):
+    def retry(self, f):
         pause = 1
         while True:
             try:
@@ -106,11 +108,11 @@ class Monitor():
             except ConnectionRefusedError:
                 self.log.error("connection refused - retrying in %ss", pause)
                 sleep(pause)
-                pause = min(holdoff * 2, 32)
+                pause = min(pause * 2, 32)
 
     def played(self, song, progress):
         if progress > self.min_prog:
-            self.log.info("registering play: %s - %s", song["Artist"], song["Title"])
+            self.log.info("registering play - %s - %s", song["Artist"], song["Title"])
             self.stats.register_play(
                 int(time()),
                 song["Artist"],
